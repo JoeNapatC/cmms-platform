@@ -1,0 +1,368 @@
+// CMMS/EAM Platform Prisma Schema
+// Comprehensive data model for asset management, work orders, and maintenance planning
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User Management & Authentication
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  name        String
+  password    String
+  roleId      String
+  teamId      String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  role        Role     @relation(fields: [roleId], references: [id])
+  team        Team?    @relation(fields: [teamId], references: [id])
+  requestedWorkOrders  WorkOrder[] @relation("WorkOrderRequestor")
+  assignedWorkOrders   WorkOrder[] @relation("WorkOrderAssignee")
+  auditLogs   AuditLog[]
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  permissions Json     // Store permissions as JSON
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  users       User[]
+
+  @@map("roles")
+}
+
+model Team {
+  id        String   @id @default(cuid())
+  name      String
+  siteId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  site      Location @relation(fields: [siteId], references: [id])
+  users     User[]
+
+  @@map("teams")
+}
+
+// Location & Asset Hierarchy
+model Location {
+  id          String     @id @default(cuid())
+  name        String
+  type        LocationType
+  parentId    String?
+  gisCoords   Json?      // Store GIS coordinates as JSON
+  description String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  parent      Location?  @relation("LocationHierarchy", fields: [parentId], references: [id])
+  children    Location[] @relation("LocationHierarchy")
+  assets      Asset[]
+  teams       Team[]
+  inventory   InventoryRecord[]
+
+  @@map("locations")
+}
+
+model Category {
+  id          String     @id @default(cuid())
+  name        String
+  description String?
+  parentId    String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryHierarchy")
+  assets      Asset[]
+
+  @@map("categories")
+}
+
+// Asset Management
+model Asset {
+  id                String       @id @default(cuid())
+  tag               String       @unique
+  serialNumber      String?
+  model             String
+  manufacturer      String
+  purchaseDate      DateTime?
+  commissioningDate DateTime?
+  warrantyExpiry    DateTime?
+  lifecycleStatus   AssetStatus  @default(ACTIVE)
+  criticality       Criticality  @default(MEDIUM)
+  locationId        String
+  categoryId        String
+  cost              Decimal?
+  description       String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  // Relations
+  location          Location     @relation(fields: [locationId], references: [id])
+  category          Category     @relation(fields: [categoryId], references: [id])
+  workOrders        WorkOrder[]
+  maintenancePlans  MaintenancePlan[]
+  documents         Document[]
+  sensorStreams     SensorStream[]
+  kpiRecords        KPIRecord[]
+
+  @@map("assets")
+}
+
+model Document {
+  id        String      @id @default(cuid())
+  assetId   String?
+  workOrderId String?
+  type      DocumentType
+  name      String
+  fileUri   String
+  version   String      @default("1.0")
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  // Relations
+  asset     Asset?      @relation(fields: [assetId], references: [id])
+  workOrder WorkOrder?  @relation(fields: [workOrderId], references: [id])
+
+  @@map("documents")
+}
+
+model SensorStream {
+  id           String   @id @default(cuid())
+  assetId      String
+  sensorType   String
+  unit         String
+  samplingRate Int      // Hz
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  asset        Asset    @relation(fields: [assetId], references: [id])
+
+  @@map("sensor_streams")
+}
+
+// Work Order Management
+model WorkOrder {
+  id            String         @id @default(cuid())
+  assetId       String
+  requestorId   String
+  assigneeId    String?
+  status        WorkOrderStatus @default(DRAFT)
+  priority      Priority       @default(MEDIUM)
+  type          WorkOrderType
+  title         String
+  description   String
+  dueDate       DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  // Relations
+  asset         Asset          @relation(fields: [assetId], references: [id])
+  requestor     User           @relation("WorkOrderRequestor", fields: [requestorId], references: [id])
+  assignee      User?          @relation("WorkOrderAssignee", fields: [assigneeId], references: [id])
+  tasks         Task[]
+  documents     Document[]
+  partUsage     WorkOrderPartUsage[]
+
+  @@map("work_orders")
+}
+
+model Task {
+  id           String    @id @default(cuid())
+  workOrderId  String
+  description  String
+  sequence     Int
+  isCompleted  Boolean   @default(false)
+  completedBy  String?
+  completedAt  DateTime?
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relations
+  workOrder    WorkOrder @relation(fields: [workOrderId], references: [id])
+
+  @@map("tasks")
+}
+
+// Maintenance Planning
+model MaintenancePlan {
+  id              String              @id @default(cuid())
+  assetId         String
+  name            String
+  type            MaintenanceType
+  frequency       Int?                // For time-based maintenance (days)
+  meterThreshold  Int?                // For meter-based maintenance
+  isActive        Boolean             @default(true)
+  nextDueDate     DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  // Relations
+  asset           Asset               @relation(fields: [assetId], references: [id])
+
+  @@map("maintenance_plans")
+}
+
+// Inventory Management
+model SparePart {
+  id          String   @id @default(cuid())
+  partNumber  String   @unique
+  name        String
+  description String?
+  unitCost    Decimal
+  supplierId  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  inventory   InventoryRecord[]
+  usage       WorkOrderPartUsage[]
+
+  @@map("spare_parts")
+}
+
+model InventoryRecord {
+  id           String   @id @default(cuid())
+  partId       String
+  locationId   String
+  quantityOnHand Int
+  reorderPoint Int
+  safetyStock  Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  part         SparePart @relation(fields: [partId], references: [id])
+  location     Location  @relation(fields: [locationId], references: [id])
+
+  @@unique([partId, locationId])
+  @@map("inventory_records")
+}
+
+model WorkOrderPartUsage {
+  id          String    @id @default(cuid())
+  workOrderId String
+  partId      String
+  quantity    Int
+  createdAt   DateTime  @default(now())
+
+  // Relations
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
+  part        SparePart @relation(fields: [partId], references: [id])
+
+  @@map("work_order_part_usage")
+}
+
+// KPIs and Analytics
+model KPIRecord {
+  id         String   @id @default(cuid())
+  assetId    String?
+  metricType String
+  value      Decimal
+  timestamp  DateTime @default(now())
+
+  // Relations
+  asset      Asset?   @relation(fields: [assetId], references: [id])
+
+  @@map("kpi_records")
+}
+
+// Audit Trail
+model AuditLog {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  userId     String
+  action     String
+  before     Json?
+  after      Json?
+  timestamp  DateTime @default(now())
+
+  // Relations
+  user       User     @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
+
+// Enums
+enum LocationType {
+  SITE
+  BUILDING
+  FLOOR
+  ROOM
+}
+
+enum AssetStatus {
+  ACTIVE
+  INACTIVE
+  DECOMMISSIONED
+  UNDER_MAINTENANCE
+}
+
+enum Criticality {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum DocumentType {
+  MANUAL
+  DRAWING
+  WARRANTY
+  CERTIFICATE
+  PHOTO
+}
+
+enum WorkOrderStatus {
+  DRAFT
+  SCHEDULED
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  CLOSED
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum WorkOrderType {
+  PREVENTIVE
+  CORRECTIVE
+  INSPECTION
+  EMERGENCY
+}
+
+enum MaintenanceType {
+  TIME_BASED
+  METER_BASED
+  PREDICTIVE
+}

@@ -1,0 +1,473 @@
+// CMMS/EAM Platform Prisma Schema - OPTIMIZED VERSION
+// Following database best practices with proper indexing and data types
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User Management & Authentication
+model User {
+  id          Int      @id @default(autoincrement())
+  uuid        String   @unique @default(cuid()) // For external APIs
+  email       String   @unique
+  name        String   @db.VarChar(255)
+  password    String   @db.VarChar(255)
+  roleId      Int
+  teamId      Int?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @updatedAt @db.Timestamptz
+
+  // Relations
+  role        Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  team        Team?    @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  requestedWorkOrders  WorkOrder[] @relation("WorkOrderRequestor")
+  assignedWorkOrders   WorkOrder[] @relation("WorkOrderAssignee")
+  auditLogs   AuditLog[]
+
+  // Indexes
+  @@index([email])
+  @@index([roleId])
+  @@index([teamId])
+  @@index([isActive])
+  @@map("users")
+}
+
+model Role {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique @db.VarChar(100)
+  description String?  @db.Text
+  permissions Json     @db.JsonB // PostgreSQL JSONB for better performance
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @updatedAt @db.Timestamptz
+
+  // Relations
+  users       User[]
+
+  @@index([name])
+  @@map("roles")
+}
+
+model Team {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(255)
+  siteId    Int
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  // Relations
+  site      Location @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  users     User[]
+
+  @@index([siteId])
+  @@map("teams")
+}
+
+// Location & Asset Hierarchy
+model Location {
+  id          Int        @id @default(autoincrement())
+  name        String     @db.VarChar(255)
+  code        String?    @unique @db.VarChar(50) // Short location code for easy reference
+  type        LocationType
+  parentId    Int?
+  gisCoords   Json?      @db.JsonB // Store GIS coordinates as JSONB
+  description String?    @db.Text
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now()) @db.Timestamptz
+  updatedAt   DateTime   @updatedAt @db.Timestamptz
+
+  // Relations
+  parent      Location?  @relation("LocationHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children    Location[] @relation("LocationHierarchy")
+  assets      Asset[]
+  teams       Team[]
+  inventory   InventoryRecord[]
+
+  // Indexes
+  @@index([parentId])
+  @@index([type])
+  @@index([code])
+  @@index([isActive])
+  @@map("locations")
+}
+
+model Category {
+  id          Int        @id @default(autoincrement())
+  name        String     @db.VarChar(255)
+  code        String?    @unique @db.VarChar(50) // Short category code
+  description String?    @db.Text
+  parentId    Int?
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now()) @db.Timestamptz
+  updatedAt   DateTime   @updatedAt @db.Timestamptz
+
+  // Relations
+  parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children    Category[] @relation("CategoryHierarchy")
+  assets      Asset[]
+
+  // Indexes
+  @@index([parentId])
+  @@index([code])
+  @@index([isActive])
+  @@map("categories")
+}
+
+// Asset Management
+model Asset {
+  id                Int          @id @default(autoincrement())
+  uuid              String       @unique @default(cuid()) // For external APIs
+  tag               String       @unique @db.VarChar(100) // Asset tag/number
+  serialNumber      String?      @db.VarChar(255)
+  model             String       @db.VarChar(255)
+  manufacturer      String       @db.VarChar(255)
+  purchaseDate      DateTime?    @db.Date
+  commissioningDate DateTime?    @db.Date
+  warrantyExpiry    DateTime?    @db.Date
+  lifecycleStatus   AssetStatus  @default(ACTIVE)
+  criticality       Criticality  @default(MEDIUM)
+  locationId        Int
+  categoryId        Int
+  cost              Decimal?     @db.Decimal(15,2) // Proper decimal precision
+  description       String?      @db.Text
+  isActive          Boolean      @default(true)
+  createdAt         DateTime     @default(now()) @db.Timestamptz
+  updatedAt         DateTime     @updatedAt @db.Timestamptz
+
+  // Relations
+  location          Location     @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  category          Category     @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  workOrders        WorkOrder[]
+  maintenancePlans  MaintenancePlan[]
+  documents         Document[]
+  sensorStreams     SensorStream[]
+  kpiRecords        KPIRecord[]
+
+  // Indexes
+  @@index([tag])
+  @@index([serialNumber])
+  @@index([locationId])
+  @@index([categoryId])
+  @@index([lifecycleStatus])
+  @@index([criticality])
+  @@index([manufacturer])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("assets")
+}
+
+model Document {
+  id          Int         @id @default(autoincrement())
+  assetId     Int?
+  workOrderId Int?
+  type        DocumentType
+  name        String      @db.VarChar(255)
+  fileUri     String      @db.VarChar(500)
+  fileSize    BigInt?     // File size in bytes
+  mimeType    String?     @db.VarChar(100)
+  version     String      @default("1.0") @db.VarChar(20)
+  createdAt   DateTime    @default(now()) @db.Timestamptz
+  updatedAt   DateTime    @updatedAt @db.Timestamptz
+
+  // Relations
+  asset       Asset?      @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  workOrder   WorkOrder?  @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  // Indexes
+  @@index([assetId])
+  @@index([workOrderId])
+  @@index([type])
+  @@map("documents")
+}
+
+model SensorStream {
+  id           Int      @id @default(autoincrement())
+  assetId      Int
+  sensorType   String   @db.VarChar(100)
+  unit         String   @db.VarChar(50)
+  samplingRate Int      // Hz
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
+
+  // Relations
+  asset        Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  // Indexes
+  @@index([assetId])
+  @@index([sensorType])
+  @@map("sensor_streams")
+}
+
+// Work Order Management
+model WorkOrder {
+  id            Int            @id @default(autoincrement())
+  number        String         @unique @db.VarChar(50) // Work order number
+  assetId       Int
+  requestorId   Int
+  assigneeId    Int?
+  status        WorkOrderStatus @default(DRAFT)
+  priority      Priority       @default(MEDIUM)
+  type          WorkOrderType
+  title         String         @db.VarChar(255)
+  description   String         @db.Text
+  dueDate       DateTime?      @db.Timestamptz
+  completedAt   DateTime?      @db.Timestamptz
+  estimatedHours Decimal?      @db.Decimal(8,2)
+  actualHours   Decimal?       @db.Decimal(8,2)
+  createdAt     DateTime       @default(now()) @db.Timestamptz
+  updatedAt     DateTime       @updatedAt @db.Timestamptz
+
+  // Relations
+  asset         Asset          @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  requestor     User           @relation("WorkOrderRequestor", fields: [requestorId], references: [id], onDelete: Restrict)
+  assignee      User?          @relation("WorkOrderAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  tasks         Task[]
+  documents     Document[]
+  partUsage     WorkOrderPartUsage[]
+
+  // Indexes
+  @@index([number])
+  @@index([assetId])
+  @@index([requestorId])
+  @@index([assigneeId])
+  @@index([status])
+  @@index([priority])
+  @@index([type])
+  @@index([dueDate])
+  @@index([createdAt])
+  @@map("work_orders")
+}
+
+model Task {
+  id           Int       @id @default(autoincrement())
+  workOrderId  Int
+  description  String    @db.Text
+  sequence     Int
+  isCompleted  Boolean   @default(false)
+  completedBy  Int?
+  completedAt  DateTime? @db.Timestamptz
+  notes        String?   @db.Text
+  createdAt    DateTime  @default(now()) @db.Timestamptz
+  updatedAt    DateTime  @updatedAt @db.Timestamptz
+
+  // Relations
+  workOrder    WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  completedByUser User?  @relation(fields: [completedBy], references: [id], onDelete: SetNull)
+
+  // Indexes
+  @@index([workOrderId])
+  @@index([sequence])
+  @@index([isCompleted])
+  @@map("tasks")
+}
+
+// Maintenance Planning
+model MaintenancePlan {
+  id              Int             @id @default(autoincrement())
+  assetId         Int
+  name            String          @db.VarChar(255)
+  type            MaintenanceType
+  frequency       Int?            // For time-based maintenance (days)
+  meterThreshold  Int?            // For meter-based maintenance
+  isActive        Boolean         @default(true)
+  nextDueDate     DateTime?       @db.Date
+  createdAt       DateTime        @default(now()) @db.Timestamptz
+  updatedAt       DateTime        @updatedAt @db.Timestamptz
+
+  // Relations
+  asset           Asset           @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  // Indexes
+  @@index([assetId])
+  @@index([type])
+  @@index([isActive])
+  @@index([nextDueDate])
+  @@map("maintenance_plans")
+}
+
+// Inventory Management
+model SparePart {
+  id          Int      @id @default(autoincrement())
+  partNumber  String   @unique @db.VarChar(100)
+  name        String   @db.VarChar(255)
+  description String?  @db.Text
+  unitCost    Decimal  @db.Decimal(15,2)
+  supplierId  Int?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @updatedAt @db.Timestamptz
+
+  // Relations
+  supplier    Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  inventory   InventoryRecord[]
+  usage       WorkOrderPartUsage[]
+
+  // Indexes
+  @@index([partNumber])
+  @@index([supplierId])
+  @@index([isActive])
+  @@map("spare_parts")
+}
+
+model Supplier {
+  id          Int        @id @default(autoincrement())
+  name        String     @db.VarChar(255)
+  contactInfo Json?      @db.JsonB
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now()) @db.Timestamptz
+  updatedAt   DateTime   @updatedAt @db.Timestamptz
+
+  // Relations
+  spareParts  SparePart[]
+
+  @@index([isActive])
+  @@map("suppliers")
+}
+
+model InventoryRecord {
+  id             Int       @id @default(autoincrement())
+  partId         Int
+  locationId     Int
+  quantityOnHand Int       @default(0)
+  reorderPoint   Int       @default(0)
+  safetyStock    Int       @default(0)
+  lastCountDate  DateTime? @db.Date
+  createdAt      DateTime  @default(now()) @db.Timestamptz
+  updatedAt      DateTime  @updatedAt @db.Timestamptz
+
+  // Relations
+  part           SparePart @relation(fields: [partId], references: [id], onDelete: Cascade)
+  location       Location  @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  // Constraints
+  @@unique([partId, locationId])
+  @@index([partId])
+  @@index([locationId])
+  @@index([quantityOnHand])
+  @@map("inventory_records")
+}
+
+model WorkOrderPartUsage {
+  id          Int       @id @default(autoincrement())
+  workOrderId Int
+  partId      Int
+  quantity    Int
+  unitCost    Decimal?  @db.Decimal(15,2)
+  createdAt   DateTime  @default(now()) @db.Timestamptz
+
+  // Relations
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  part        SparePart @relation(fields: [partId], references: [id], onDelete: Restrict)
+
+  // Indexes
+  @@index([workOrderId])
+  @@index([partId])
+  @@map("work_order_part_usage")
+}
+
+// KPIs and Analytics
+model KPIRecord {
+  id         Int      @id @default(autoincrement())
+  assetId    Int?
+  metricType String   @db.VarChar(100)
+  value      Decimal  @db.Decimal(15,4)
+  timestamp  DateTime @default(now()) @db.Timestamptz
+
+  // Relations
+  asset      Asset?   @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  // Indexes
+  @@index([assetId])
+  @@index([metricType])
+  @@index([timestamp])
+  @@map("kpi_records")
+}
+
+// Audit Trail
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  entityType String   @db.VarChar(100)
+  entityId   String   @db.VarChar(100) // Can reference different entity types
+  userId     Int
+  action     String   @db.VarChar(100)
+  before     Json?    @db.JsonB
+  after      Json?    @db.JsonB
+  timestamp  DateTime @default(now()) @db.Timestamptz
+
+  // Relations
+  user       User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  // Indexes
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([action])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
+
+// Enums (unchanged)
+enum LocationType {
+  SITE
+  BUILDING
+  FLOOR
+  ROOM
+}
+
+enum AssetStatus {
+  ACTIVE
+  INACTIVE
+  DECOMMISSIONED
+  UNDER_MAINTENANCE
+}
+
+enum Criticality {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum DocumentType {
+  MANUAL
+  DRAWING
+  WARRANTY
+  CERTIFICATE
+  PHOTO
+}
+
+enum WorkOrderStatus {
+  DRAFT
+  SCHEDULED
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  CLOSED
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum WorkOrderType {
+  PREVENTIVE
+  CORRECTIVE
+  INSPECTION
+  EMERGENCY
+}
+
+enum MaintenanceType {
+  TIME_BASED
+  METER_BASED
+  PREDICTIVE
+}
